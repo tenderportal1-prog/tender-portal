@@ -3,7 +3,7 @@ Tender scraper - Phase 2.
 Reads public tender tables from Pakistani procurement portals and saves them
 into your Supabase `tenders` table. Safe to run repeatedly (no duplicates).
 """
-import os, re, sys, hashlib
+import os, re, sys, time, hashlib
 from datetime import timezone, timedelta
 from urllib.parse import urljoin
 
@@ -13,7 +13,7 @@ from dateutil import parser as dparser
 
 PKT = timezone(timedelta(hours=5))
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TenderPortalBot/1.0)"}
-MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "60"))
 _DEBUGGED = set()
 
 # ---- Sources. Add or switch off portals here. ----
@@ -96,19 +96,28 @@ def parse_page(html, src):
             print(f"   DEBUG [{src['name']}] column headers: {head}")
             print(f"   DEBUG [{src['name']}] matched columns: {cols}")
             if len(trs) > 1:
-                sample = [c.get_text(' ', strip=True)[:60] for c in trs[1].find_all('td')]
-                print(f"   DEBUG [{src['name']}] first row: {sample}")
+                print(f"   DEBUG [{src['name']}] row1 html: {str(trs[1])[:3500]}")
+            if len(trs) > 2:
+                print(f"   DEBUG [{src['name']}] row2 html: {str(trs[2])[:2500]}")
         for tr in trs[1:]:
             tds = tr.find_all("td")
             if len(tds) < 3:
                 continue
             get = lambda k: tds[cols[k]] if k in cols and cols[k] < len(tds) else None
-            title = first_line(get("title")) if get("title") else None
+            tcell = get("title")
+            lines = [l.strip() for l in tcell.get_text("\n").split("\n") if l.strip()] if tcell else []
+            lines = [l for l in lines if "view invoice" not in l.lower()]
+            title = lines[0][:500] if lines else None
             if not title:
                 continue
+            item_type = lines[-2] if len(lines) >= 3 and len(lines[-2]) <= 40 else None
+            middle = lines[1:-2] if item_type else lines[1:]
+            description = " | ".join(middle)[:1000] or None
             dept = get("department").get_text(" ", strip=True) if get("department") else None
             ext = get("external_id").get_text(" ", strip=True) if get("external_id") else None
-            ext = re.sub(r"(?i)view invoice", "", ext or "").strip() or None
+            ext = re.sub(r"(?i)view invoice", "", ext or "").strip()
+            m_ext = re.match(r"TS\d+[A-Z]?", ext)
+            ext = (m_ext.group(0) if m_ext else ext) or None
             closing = parse_date(get("closing").get_text(" ", strip=True)) if get("closing") else None
             if not ext:
                 ext = hashlib.md5(f"{title}|{dept}|{closing}".encode()).hexdigest()[:16]
@@ -127,6 +136,7 @@ def parse_page(html, src):
                 "closing_date": closing,
                 "advertised_date": parse_date(get("advertised").get_text(" ", strip=True)) if get("advertised") else None,
                 "status": get("status").get_text(" ", strip=True) if get("status") else None,
+                "item_type": item_type, "description": description,
                 "detail_url": link, "document_url": link,
             })
     return rows
@@ -137,7 +147,8 @@ def scrape_source(src):
     pages = range(1, MAX_PAGES + 1) if src["paged"] else [1]
     for p in pages:
         url = src["url"] + (f"?page={p}" if src["paged"] else "")
-        r = requests.get(url, headers=HEADERS, timeout=60)
+        r = requests.get(url, headers=HEADERS, timeout=(10, 40))
+        time.sleep(0.3)
         r.raise_for_status()
         rows = [x for x in parse_page(r.text, src) if x["external_id"] not in seen]
         if not rows:
