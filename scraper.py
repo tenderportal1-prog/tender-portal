@@ -14,6 +14,7 @@ from dateutil import parser as dparser
 PKT = timezone(timedelta(hours=5))
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TenderPortalBot/1.0)"}
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
+_DEBUGGED = set()
 
 # ---- Sources. Add or switch off portals here. ----
 SOURCES = [
@@ -90,6 +91,13 @@ def parse_page(html, src):
         cols = map_headers(head)
         if "title" not in cols or "closing" not in cols:
             continue
+        if src["name"] not in _DEBUGGED:
+            _DEBUGGED.add(src["name"])
+            print(f"   DEBUG [{src['name']}] column headers: {head}")
+            print(f"   DEBUG [{src['name']}] matched columns: {cols}")
+            if len(trs) > 1:
+                sample = [c.get_text(' ', strip=True)[:60] for c in trs[1].find_all('td')]
+                print(f"   DEBUG [{src['name']}] first row: {sample}")
         for tr in trs[1:]:
             tds = tr.find_all("td")
             if len(tds) < 3:
