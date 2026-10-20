@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tender Portal</title>
+<style>
+  :root { --bg:#f5f7fa; --card:#fff; --text:#1c2733; --muted:#6b7785; --accent:#1769aa; --line:#e1e6ec; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12171d; --card:#1b232c; --text:#e8edf2; --muted:#9aa7b4; --accent:#5aa9e6; --line:#2a3541; --warn:#f0a35c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; flex:1; }
+  main { max-width:900px; margin:0 auto; padding:16px; }
+  input, select, button { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); }
+  button { background:var(--accent); color:#fff; border:none; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  .box { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .row > input { flex:1; min-width:160px; }
+  .meta { color:var(--muted); font-size:14px; margin:4px 0; }
+  .days { font-weight:600; }
+  .days.soon { color:var(--warn); }
+  .tabs button { margin-right:6px; }
+  .msg { color:var(--warn); margin-top:8px; }
+  .pager { display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tender Portal</h1>
+  <span id="who" class="meta"></span>
+  <button id="logout" class="secondary" hidden>Log out</button>
+</header>
+<main>
+  <section id="auth" class="box">
+    <h2>Log in or create an account</h2>
+    <div class="row">
+      <input id="email" type="email" placeholder="Email">
+      <input id="password" type="password" placeholder="Password (6+ characters)">
+    </div>
+    <div class="row">
+      <button id="login">Log in</button>
+      <button id="signup" class="secondary">Sign up</button>
+    </div>
+    <div id="authmsg" class="msg"></div>
+  </section>
+
+  <section id="app" hidden>
+    <div class="tabs row">
+      <button id="tabTenders">Tenders</button>
+      <button id="tabPipeline" class="secondary">My Pipeline</button>
+    </div>
+
+    <div id="tendersView">
+      <div class="row">
+        <input id="q" placeholder="Search title or department">
+        <select id="province">
+          <option value="">All provinces</option>
+          <option>Federal</option>
+          <option>Punjab</option>
+          <option>Sindh</option>
+          <option>Khyber Pakhtunkhwa</option>
+          <option>Balochistan</option>
+        </select>
+        <button id="search">Search</button>
+      </div>
+      <div id="list"></div>
+      <div class="pager">
+        <button id="prev" class="secondary">Previous</button>
+        <span id="pageinfo" class="meta"></span>
+        <button id="next" class="secondary">Next</button>
+      </div>
+    </div>
+
+    <div id="pipelineView" hidden>
+      <div id="pipelineList"></div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// ====== PASTE YOUR TWO VALUES HERE (from Supabase > Project Settings > API) ======
+const SUPABASE_URL = "https://moehfopmnleogcfjqiyp.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1vZWhmb3Btbmxlb2djZmpxaXlwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0NjA2MTgsImV4cCI6MjEwODAzNjYxOH0.vGSMXappENpYfNpmNJTOQ-EZ1Ai5-1Wm3SVdS5V43mo";
+// ================================================================================
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const PAGE_SIZE = 20;
+let page = 0;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const fmtDate = (d) => d ? new Date(d).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "n/a";
+const daysLeft = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null;
+
+function show(loggedIn, email) {
+  $("auth").hidden = loggedIn;
+  $("app").hidden = !loggedIn;
+  $("logout").hidden = !loggedIn;
+  $("who").textContent = loggedIn ? email : "";
+}
+
+async function auth(kind) {
+  $("authmsg").textContent = "";
+  const email = $("email").value.trim();
+  const password = $("password").value;
+  const { error } = kind === "signup"
+    ? await sb.auth.signUp({ email, password })
+    : await sb.auth.signInWithPassword({ email, password });
+  if (error) { $("authmsg").textContent = error.message; return; }
+  if (kind === "signup") $("authmsg").textContent = "Account created. Check your email to confirm, then log in.";
+}
+
+function cardHtml(t, extra = "") {
+  const d = daysLeft(t.closing_date);
+  const soon = d !== null && d <= 3 ? " soon" : "";
+  const link = t.detail_url ? `<a href="${esc(t.detail_url)}" target="_blank" rel="noopener">View original</a>` : "";
+  return `<div class="box">
+    <strong>${esc(t.title)}</strong>
+    <div class="meta">${esc(t.department)} · ${esc(t.city || "")} ${esc(t.province || "")} · ${esc(t.source)}</div>
+    <div class="meta">Closes: ${fmtDate(t.closing_date)} <span class="days${soon}">${d === null ? "" : `(${d} day${d === 1 ? "" : "s"} left)`}</span></div>
+    <div class="row">${link}${extra}</div>
+  </div>`;
+}
+
+async function loadTenders() {
+  let q = sb.from("tenders").select("*", { count: "exact" })
+    .gte("closing_date", new Date().toISOString())
+    .order("closing_date", { ascending: true })
+    .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+  const text = $("q").value.trim().replace(/[,()%*]/g, " ");
+  if (text) q = q.or(`title.ilike.%${text}%,department.ilike.%${text}%`);
+  if ($("province").value) q = q.eq("province", $("province").value);
+  const { data, count, error } = await q;
+  if (error) { $("list").innerHTML = `<div class="msg">${esc(error.message)}</div>`; return; }
+  $("list").innerHTML = data.length
+    ? data.map((t) => cardHtml(t, `<button data-add="${esc(t.id)}">Express Interest</button>`)).join("")
+    : '<div class="box">No tenders found.</div>';
+  const pages = Math.max(1, Math.ceil((count || 0) / PAGE_SIZE));
+  $("pageinfo").textContent = `Page ${page + 1} of ${pages} (${count || 0} tenders)`;
+  $("prev").disabled = page === 0;
+  $("next").disabled = page + 1 >= pages;
+}
+
+async function addToPipeline(tenderId, btn) {
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from("pipeline").insert({ user_id: user.id, tender_id: tenderId });
+  btn.textContent = error && error.code !== "23505" ? "Error, try again" : "Added to pipeline";
+  if (!error || error.code === "23505") btn.disabled = true;
+}
+
+async function loadPipeline() {
+  const { data, error } = await sb.from("pipeline").select("id, buffer_hours, tenders(*)").order("created_at", { ascending: false });
+  if (error) { $("pipelineList").innerHTML = `<div class="msg">${esc(error.message)}</div>`; return; }
+  $("pipelineList").innerHTML = data.length ? data.map((p) => {
+    const t = p.tenders;
+    const prep = t.closing_date ? new Date(new Date(t.closing_date) - p.buffer_hours * 3600000) : null;
+    return cardHtml(t, `<span class="meta">Prepare by: ${prep ? fmtDate(prep) : "n/a"} (${p.buffer_hours}h before closing)</span>`);
+  }).join("") : '<div class="box">Your pipeline is empty. Click "Express Interest" on a tender.</div>';
+}
+
+function tab(which) {
+  $("tendersView").hidden = which !== "tenders";
+  $("pipelineView").hidden = which !== "pipeline";
+  $("tabTenders").className = which === "tenders" ? "" : "secondary";
+  $("tabPipeline").className = which === "pipeline" ? "" : "secondary";
+  if (which === "pipeline") loadPipeline();
+}
+
+$("login").onclick = () => auth("login");
+$("signup").onclick = () => auth("signup");
+$("logout").onclick = () => sb.auth.signOut();
+$("search").onclick = () => { page = 0; loadTenders(); };
+$("prev").onclick = () => { page--; loadTenders(); };
+$("next").onclick = () => { page++; loadTenders(); };
+$("tabTenders").onclick = () => tab("tenders");
+$("tabPipeline").onclick = () => tab("pipeline");
+$("list").onclick = (e) => { const id = e.target.dataset && e.target.dataset.add; if (id) addToPipeline(id, e.target); };
+
+sb.auth.onAuthStateChange((_event, session) => {
+  show(!!session, session && session.user.email);
+  if (session) { tab("tenders"); loadTenders(); }
+});
+</script>
+</body>
+</html>
